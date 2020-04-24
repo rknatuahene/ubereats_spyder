@@ -5,6 +5,7 @@
 from selenium import webdriver
 import time
 import collections
+import re
 
 driver = webdriver.Chrome()
 
@@ -15,11 +16,16 @@ try:
 except:
 	print("link broken\n")
 	driver.close()
-else: ##since successful opening start url proceed to unleash the spider
+else: 
+	##since successful opening start url proceed to unleash the spider
 	location_links = {} #dict to store urls to all cities: location_links[city] = url
 	location_category_links = collections.defaultdict(dict) #dict to store urls to categories within a city
 															#location_category_links[city][category]= url
 	restaurant_links_percity_percategory= collections.defaultdict(dict) #dict to store restaurant pages by [city][category]
+	restaurant_master_dict = collections.defaultdict(dict)
+
+	fp = open('restaurant_info.csv', 'w')
+	fp.write(f'uber_city,name,food_category,priciness_level,ratings,num_reviews,street_address,local_city,state,zipcode' +'\n')
 
 	try:
 		loc = driver.find_elements_by_xpath("//main//div//a")
@@ -77,9 +83,16 @@ else: ##since successful opening start url proceed to unleash the spider
 				location_category_links[city][split_link[1]] = cat_link
 
 
-
+		cnt =0 
 	###for each city and category get the links to restaurant pages with their menus.
 		for category in location_category_links[city].keys():
+			## do this for only 5 categories for now
+			if cnt > 1:
+				break
+			else:
+				cnt+=1
+			## do this for only 5 categories for now
+
 			cat_link = location_category_links[city][category]
 
 			try:
@@ -111,4 +124,109 @@ else: ##since successful opening start url proceed to unleash the spider
 			print(restaurant_list)
 			print("\n\n")
 
+
+	####Now get restaurant details for each page:
+	# attributes: restaurant_name, rest_food_category, rest_priciness, street_address, city, state, zipcode
+		def cleanRestaurantString(s):
+			if s:
+				s = s.strip()
+				return s.split("\n")[0]
+			return ""
+
+		cntr = 0
+		while cntr < 1:
+			cntr+=1
+			for city in restaurant_links_percity_percategory.keys():
+				for category in restaurant_links_percity_percategory[city].keys():
+					for restaurant_page in restaurant_links_percity_percategory[city][category]:
+						restaurant_name = ""
+						rest_food_category = ""
+						rest_priciness = ""
+						street_address = ""
+						local_city = ""
+						(state, zipcode) = ("","")
+
+						try:
+							driver.get(restaurant_page)
+							time.sleep(5)
+						except:
+							print("link broken\n")
+							continue
+
+						try:
+							restaurant_name = driver.find_element_by_xpath('//div//h1').text
+
+						except:
+							print(f'{restaurant_page} is not valid')
+							continue
+						else:
+							pricey_restaurant_type = driver.find_element_by_xpath('//div//h1//following-sibling::div').text
+							s = list(map(str.strip, pricey_restaurant_type.split('•')))
+							if len(s) >=2:
+								rest_food_category = ','.join(s[1:])
+								rest_priciness = s[0] 
+							
+
+							###get restaurant address
+							restaurant_address = driver.find_element_by_xpath('//div//p').text
+							addy = restaurant_address.split(',')
+
+							addy = list(map(cleanRestaurantString, addy))
+							if len(addy) > 2:
+								street_address = addy[0]
+								local_city = addy[1]
+								group = re.search('([a-zA-Z\s]+)(\d+)', addy[2])
+								
+								try:
+									state = group[1].strip()
+									zipcode = group[2].strip()
+								except:
+									print(f'could not get state and zipcode. moving on')
+									continue
+							
+							try:
+								ratings_info = driver.find_element_by_xpath('//div[contains(text(),"View delivery time")]//parent::div').text
+							except:
+								print("no ratings so moving on\n")
+								continue
+
+							ratings_info = ratings_info.split("\n")
+							if len(ratings_info) > 1:
+								ratings = ratings_info[0].strip()
+								ratings = re.sub('[^0-9\.]','',ratings).strip(".")
+								num_reviews = re.sub('[\(\)]','',ratings_info[1])
+								num_reviews = re.sub('\D','',num_reviews)
+
+							print(f'name:{restaurant_name}')
+							print(f'food_category:{rest_food_category}')
+							print(f'priciness_level:{rest_priciness}')
+							print(f'ratings_why:{ratings}')
+							print(f'num_reviews_why:{num_reviews}')
+							print(f'street_addy:{street_address}')
+							print(f'city:{local_city}')
+							print(f'state:{state}')
+							print(f'zipcode:{zipcode}')
+							print("-"*50)
+							restaurant_master_dict[restaurant_name]["name"] = restaurant_name
+							restaurant_master_dict[restaurant_name]["food_category"] = rest_food_category
+							restaurant_master_dict[restaurant_name]["priciness_level"] = rest_priciness
+							restaurant_master_dict[restaurant_name]["rating"] = ratings
+							restaurant_master_dict[restaurant_name]["num_reviews"] = num_reviews
+							restaurant_master_dict[restaurant_name]["street_address"] = street_address
+							restaurant_master_dict[restaurant_name]["address_city"] = local_city
+							restaurant_master_dict[restaurant_name]["state"] = state
+							restaurant_master_dict[restaurant_name]["zipcode"] = zipcode
+			print(f'done processing city:{city}')
+			print(f'writing data to file')
+			for restaurant_name in restaurant_master_dict.keys():
+				food_category	=		restaurant_master_dict[restaurant_name]["food_category"]
+				priciness_level	=		restaurant_master_dict[restaurant_name]["priciness_level"]
+				ratings			=		restaurant_master_dict[restaurant_name]["rating"]
+				num_reviews		=		restaurant_master_dict[restaurant_name]["num_reviews"]
+				street_address	=		restaurant_master_dict[restaurant_name]["street_address"]
+				local_city		=		restaurant_master_dict[restaurant_name]["address_city"]
+				state			=		restaurant_master_dict[restaurant_name]["state"] 
+				zipcode			=		restaurant_master_dict[restaurant_name]["zipcode"]
+				fp.write(f'{city},{restaurant_name},\"{food_category}\",{priciness_level},{ratings},{num_reviews},\"{street_address}\",{local_city},{state},{zipcode}' +'\n')
+fp.close()
 driver.close()
