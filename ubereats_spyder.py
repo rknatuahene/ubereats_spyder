@@ -7,8 +7,19 @@ import time
 import collections
 import re
 
-driver = webdriver.Chrome()
+###helper function to clean some of the string data
+def cleanRestaurantString(s):
+	if s:
+		s = s.strip()
+		return s.split("\n")[0]
+	return ""
 
+###end of helper function
+
+
+
+###begin main thread
+driver = webdriver.Chrome()
 start_url  = "https://www.ubereats.com/location"
 
 try:
@@ -25,7 +36,7 @@ else:
 	restaurant_master_dict = collections.defaultdict(dict)
 
 	fp = open('restaurant_info.csv', 'w')
-	fp.write(f'uber_city,name,food_category,priciness_level,ratings,num_reviews,street_address,local_city,state,zipcode' +'\n')
+	fp.write(f'uber_city,name,food_category,priciness_level,ratings,num_reviews,sub_menu_title,dish_name,dish_description,price($),street_address,local_city,state,zipcode' +'\n')
 
 	try:
 		loc = driver.find_elements_by_xpath("//main//div//a")
@@ -127,18 +138,17 @@ else:
 
 	####Now get restaurant details for each page:
 	# attributes: restaurant_name, rest_food_category, rest_priciness, street_address, city, state, zipcode
-		def cleanRestaurantString(s):
-			if s:
-				s = s.strip()
-				return s.split("\n")[0]
-			return ""
-
 		cntr = 0
 		while cntr < 1:
 			cntr+=1
+			restaurant_per_city_cnt =0 #remove once production ready
 			for city in restaurant_links_percity_percategory.keys():
 				for category in restaurant_links_percity_percategory[city].keys():
 					for restaurant_page in restaurant_links_percity_percategory[city][category]:
+						if restaurant_per_city_cnt > 10:   ###remove once production ready
+							break
+						else:
+							restaurant_per_city_cnt+=1
 						restaurant_name = ""
 						rest_food_category = ""
 						rest_priciness = ""
@@ -180,6 +190,7 @@ else:
 								try:
 									state = group[1].strip()
 									zipcode = group[2].strip()
+									zipcode = zipcode.zfill(5) #US zip codes are 5 digits
 								except:
 									print(f'could not get state and zipcode. moving on')
 									continue
@@ -200,13 +211,15 @@ else:
 							print(f'name:{restaurant_name}')
 							print(f'food_category:{rest_food_category}')
 							print(f'priciness_level:{rest_priciness}')
-							print(f'ratings_why:{ratings}')
-							print(f'num_reviews_why:{num_reviews}')
+							print(f'ratings:{ratings}')
+							print(f'num_reviews:{num_reviews}')
 							print(f'street_addy:{street_address}')
 							print(f'city:{local_city}')
 							print(f'state:{state}')
 							print(f'zipcode:{zipcode}')
 							print("-"*50)
+
+							##store restaurant details in dict
 							restaurant_master_dict[restaurant_name]["name"] = restaurant_name
 							restaurant_master_dict[restaurant_name]["food_category"] = rest_food_category
 							restaurant_master_dict[restaurant_name]["priciness_level"] = rest_priciness
@@ -216,6 +229,48 @@ else:
 							restaurant_master_dict[restaurant_name]["address_city"] = local_city
 							restaurant_master_dict[restaurant_name]["state"] = state
 							restaurant_master_dict[restaurant_name]["zipcode"] = zipcode
+
+
+							#####now we can get and store restaurant menu
+							#initialize menu related items
+							sub_menu_title =""
+							dish_name =""
+							dish_description =""
+							price =""
+
+							try:
+								full_menu_element = driver.find_elements_by_xpath('//div/ul/li')
+							except:
+								print(f'couldn\'t get menu for {restaurant_page}')
+								continue
+							else:
+								restaurant_menu = collections.defaultdict(dict)
+								for sub_menu_element in full_menu_element:  ##get the subsection
+									sub_menu_title = cleanRestaurantString(sub_menu_element.find_element_by_xpath('./h2').text) ##get the subsection titles
+									
+									if not sub_menu_title: #ignore if there's no menu sub-section name
+										continue
+
+									sub_menu_items = sub_menu_element.find_elements_by_xpath('./ul/li') ##get the menus in each subsection
+
+									for menu in sub_menu_items:
+										dish_name = cleanRestaurantString(menu.find_element_by_xpath('.//h4').text)
+										
+										if not dish_name:  #ignore if there's no dish name
+											continue
+										dish_desc_and_price = cleanRestaurantString(menu.find_element_by_xpath('.//h4//following-sibling::div').text)
+
+										try:
+											price = cleanRestaurantString(menu.find_element_by_xpath('.//h4//following-sibling::div[2]').text)
+										except:
+											price = dish_desc_and_price.strip("$")  #strip the dollar signs
+											dish_description = ""
+										else:
+											price = price.strip("$") #strip the dollar signs
+											dish_description = dish_desc_and_price
+										
+										restaurant_menu[sub_menu_title][dish_name]=[dish_description, price]
+								restaurant_master_dict[restaurant_name]["menu"] = restaurant_menu
 			print(f'done processing city:{city}')
 			print(f'writing data to file')
 			for restaurant_name in restaurant_master_dict.keys():
@@ -227,6 +282,11 @@ else:
 				local_city		=		restaurant_master_dict[restaurant_name]["address_city"]
 				state			=		restaurant_master_dict[restaurant_name]["state"] 
 				zipcode			=		restaurant_master_dict[restaurant_name]["zipcode"]
-				fp.write(f'{city},{restaurant_name},\"{food_category}\",{priciness_level},{ratings},{num_reviews},\"{street_address}\",{local_city},{state},{zipcode}' +'\n')
+
+				##get menu items
+				for sub_menu_title in restaurant_master_dict[restaurant_name]["menu"].keys():
+					for dish_name in restaurant_master_dict[restaurant_name]["menu"][sub_menu_title].keys():
+						[dish_description, price] = restaurant_master_dict[restaurant_name]["menu"][sub_menu_title][dish_name]
+						fp.write(f'\"{city}\",\"{restaurant_name}\",\"{food_category}\",{priciness_level},{ratings},{num_reviews},\"{sub_menu_title}\",\"{dish_name}\",\"{dish_description}\",{price},\"{street_address}\",\"{local_city}\",\"{state}\",\"{zipcode}\"' +'\n')
 fp.close()
 driver.close()
