@@ -11,6 +11,7 @@ import time
 import collections
 import re
 
+
 ###helper function to clean some of the string data
 def cleanRestaurantString(s):
 	if s:
@@ -20,7 +21,45 @@ def cleanRestaurantString(s):
 
 ###end of helper function
 
+outputdatafile = 'restaurant_menu_details.csv'
+visitedpages = "visited_urls.csv"
+finishedcities ="finished_cities.csv"
 
+####create the have visited dictionary so we visit a restaurant page only once even if it's listed in multiple cities
+isVisited =collections.defaultdict(dict)
+isFinishedCities = collections.defaultdict(dict)
+
+try:
+	vp = open(visitedpages, 'r')
+except:
+	pass
+else:
+	for line in vp:
+		[url, city] = line.split(",")
+		url = url.strip("\"")
+		city = city.strip("\"")
+		isVisited[url] = city
+	vp.close
+
+###add headers to output file if it's first time
+try:
+	fp = open(outputdatafile, 'r')
+except:
+	fp = open(outputdatafile, 'w')
+	fp.write(f'uber_city,name,food_category,priciness_level,ratings,num_reviews,sub_menu_title,dish_name,dish_description,price($),street_address,local_city,state,zipcode,url' +'\n')
+fp.close()
+
+
+####got to do a similar thing for cities
+try:
+	cp = open(finishedcities, 'r')
+except:
+	pass
+else:
+	for line in cp:
+		city = line.strip("\"")
+		isFinishedCities[city] = 1
+	cp.close
 
 ###begin main thread
 RESTAURANT_MAX_PER_CITY = 100   #Here due to size and time constraints. can be increased. to be moved to config file 
@@ -40,10 +79,11 @@ else:
 	location_category_links = collections.defaultdict(dict) #dict to store urls to categories within a city
 															#location_category_links[city][category]= url
 	restaurant_links_percity_percategory= collections.defaultdict(dict) #dict to store restaurant pages by [city][category]
-	restaurant_master_dict = collections.defaultdict(dict)
+	
 
-	fp = open('restaurant_menu_details.csv', 'w')
-	fp.write(f'uber_city,name,food_category,priciness_level,ratings,num_reviews,sub_menu_title,dish_name,dish_description,price($),street_address,local_city,state,zipcode' +'\n')
+	fp = open(outputdatafile, 'a') #append to restaurant details and menu pages
+	vp = open(visitedpages,'a') #append to visited pages
+	cp = open(finishedcities,'a')  #append to finished cities
 
 	try:
 		loc = driver.find_elements_by_xpath("//main//div//a")
@@ -71,13 +111,18 @@ else:
 	# city_category_url = location_links[city] #replace with a loop variable
 	city_cnt=0
 	for city in location_links.keys():
+		if isFinishedCities[city]:   ##do not do a city that's already been parsed
+			print(f'already parsed city:{city}. moving on')
+			continue
+
+		restaurant_master_dict = collections.defaultdict(dict)
 		city_category_url = location_links[city]
 		try:
 			driver.get(city_category_url)
-			time.sleep(3)
+			time.sleep(1)
 		except:
 			print(f'{city_category_url} is broken')
-			time.sleep(3)
+			time.sleep(1)
 			continue
 
 	###get all the category links on the city page
@@ -85,7 +130,7 @@ else:
 			cat = driver.find_elements_by_xpath("//main//div/h3/a")
 		except:
 			print(f'no category links for {city_category_url}')
-			time.sleep(3)
+			time.sleep(1)
 			continue
 		
 		#cnt categories and form the links to each category per city in a dictionary of dictionaries
@@ -115,10 +160,10 @@ else:
 
 			try:
 				driver.get(cat_link)
-				time.sleep(3)
+				time.sleep(1)
 			except:
 				print(f'{cat_link} is broken')
-				time.sleep(3)
+				time.sleep(1)
 				continue
 
 		###get all the links to restaurants in this category for this city!
@@ -149,6 +194,9 @@ else:
 		for city in restaurant_links_percity_percategory.keys():
 			for category in restaurant_links_percity_percategory[city].keys():
 				for restaurant_page in restaurant_links_percity_percategory[city][category]:
+					if isVisited[restaurant_page]:  #only get unique restaurant pages for time and space contraints
+						print(f'already visited:{restaurant_page}. moving on')
+						continue
 					if restaurant_per_city_cnt > RESTAURANT_MAX_PER_CITY:   
 						break
 					else:
@@ -162,9 +210,14 @@ else:
 
 					try:
 						driver.get(restaurant_page)
-						time.sleep(3)
+						###store recorded of visited page
+						isVisited[restaurant_page] = city
+						vp.write(f'\"{restaurant_page}\",\"{city}\"' +'\n')
+						time.sleep(1)
 					except:
 						print("link broken\n")
+						isVisited[restaurant_page] = city
+						vp.write(f'\"{restaurant_page}\",\"{city}\"' +'\n')
 						continue
 
 					try:
@@ -174,7 +227,11 @@ else:
 						print(f'{restaurant_page} is not valid')
 						continue
 					else:
-						pricey_restaurant_type = driver.find_element_by_xpath('//div//h1//following-sibling::div').text
+						try:
+							pricey_restaurant_type = driver.find_element_by_xpath('//div//h1//following-sibling::div').text
+						except:
+							print(f'bad pricing and rest type info. moving on')
+							continue
 						s = list(map(str.strip, pricey_restaurant_type.split('•')))
 						if len(s) >=2:
 							rest_food_category = ','.join(s[1:])
@@ -182,11 +239,19 @@ else:
 						
 
 						###get restaurant address
-						restaurant_address = driver.find_element_by_xpath('//div//p').text
+						try:
+							restaurant_address = driver.find_element_by_xpath('//div//p').text
+						except:
+							print(f'bad restaurant address. moving on')
+							continue
 						addy = restaurant_address.split(',')
 
 						addy = list(map(cleanRestaurantString, addy))
 						if len(addy) > 2:
+							if len(addy) == 4:
+								addy[0] = addy[0] + " " + addy[1]
+								addy[1] = addy[2]
+								addy[2] = addy[3]
 							street_address = addy[0]
 							local_city = addy[1]
 							group = re.search('([a-zA-Z\s]+)(\d+)', addy[2])
@@ -221,7 +286,7 @@ else:
 						print(f'city:{local_city}')
 						print(f'state:{state}')
 						print(f'zipcode:{zipcode}')
-						print(f'count of restaurants:{restaurant_per_city_cnt}')
+						print(f'restaurant_cnt:{restaurant_per_city_cnt}')
 						print("-"*50)
 
 						##store restaurant details in dict
@@ -234,8 +299,9 @@ else:
 						restaurant_master_dict[restaurant_name]["address_city"] = local_city
 						restaurant_master_dict[restaurant_name]["state"] = state
 						restaurant_master_dict[restaurant_name]["zipcode"] = zipcode
+						restaurant_master_dict[restaurant_name]["url"] = restaurant_page
 
-
+						
 						#####now we can get and store restaurant menu
 						#initialize menu related items
 						sub_menu_title =""
@@ -251,30 +317,33 @@ else:
 						else:
 							restaurant_menu = collections.defaultdict(dict)
 							for sub_menu_element in full_menu_element:  ##get the subsection
-								sub_menu_title = cleanRestaurantString(sub_menu_element.find_element_by_xpath('./h2').text) ##get the subsection titles
-								
-								if not sub_menu_title: #ignore if there's no menu sub-section name
-									continue
-
-								sub_menu_items = sub_menu_element.find_elements_by_xpath('./ul/li') ##get the menus in each subsection
-
-								for menu in sub_menu_items:
-									dish_name = cleanRestaurantString(menu.find_element_by_xpath('.//h4').text)
+								try:
+									sub_menu_title = cleanRestaurantString(sub_menu_element.find_element_by_xpath('./h2').text) ##get the subsection titles
 									
-									if not dish_name:  #ignore if there's no dish name
+									if not sub_menu_title: #ignore if there's no menu sub-section name
 										continue
-									dish_desc_and_price = cleanRestaurantString(menu.find_element_by_xpath('.//h4//following-sibling::div').text)
 
-									try:
-										price = cleanRestaurantString(menu.find_element_by_xpath('.//h4//following-sibling::div[2]').text)
-									except:
-										price = dish_desc_and_price.strip("$")  #strip the dollar signs
-										dish_description = ""
-									else:
-										price = price.strip("$") #strip the dollar signs
-										dish_description = dish_desc_and_price
-									
-									restaurant_menu[sub_menu_title][dish_name]=[dish_description, price]
+									sub_menu_items = sub_menu_element.find_elements_by_xpath('./ul/li') ##get the menus in each subsection
+
+									for menu in sub_menu_items:
+										dish_name = cleanRestaurantString(menu.find_element_by_xpath('.//h4').text)
+										
+										if not dish_name:  #ignore if there's no dish name
+											continue
+										dish_desc_and_price = cleanRestaurantString(menu.find_element_by_xpath('.//h4//following-sibling::div').text)
+
+										try:
+											price = cleanRestaurantString(menu.find_element_by_xpath('.//h4//following-sibling::div[2]').text)
+										except:
+											price = dish_desc_and_price.strip("$")  #strip the dollar signs
+											dish_description = ""
+										else:
+											price = price.strip("$") #strip the dollar signs
+											dish_description = dish_desc_and_price
+										
+										restaurant_menu[sub_menu_title][dish_name]=[dish_description, price]
+								except:
+									continue
 							restaurant_master_dict[restaurant_name]["menu"] = restaurant_menu
 		print(f'done processing city:{city}')
 		print(f'writing data to file')
@@ -287,11 +356,19 @@ else:
 			local_city		=		restaurant_master_dict[restaurant_name]["address_city"]
 			state			=		restaurant_master_dict[restaurant_name]["state"] 
 			zipcode			=		restaurant_master_dict[restaurant_name]["zipcode"]
+			url             = 		restaurant_master_dict[restaurant_name]["url"]
 
 			##get menu items
 			for sub_menu_title in restaurant_master_dict[restaurant_name]["menu"].keys():
 				for dish_name in restaurant_master_dict[restaurant_name]["menu"][sub_menu_title].keys():
 					[dish_description, price] = restaurant_master_dict[restaurant_name]["menu"][sub_menu_title][dish_name]
-					fp.write(f'\"{city}\",\"{restaurant_name}\",\"{food_category}\",{priciness_level},{ratings},{num_reviews},\"{sub_menu_title}\",\"{dish_name}\",\"{dish_description}\",{price},\"{street_address}\",\"{local_city}\",\"{state}\",\"{zipcode}\"' +'\n')
+					fp.write(f'\"{city}\",\"{restaurant_name}\",\"{food_category}\",{priciness_level},{ratings},{num_reviews},\"{sub_menu_title}\",\"{dish_name}\",\"{dish_description}\",{price},\"{street_address}\",\"{local_city}\",\"{state}\",\"{zipcode}\",\"{url}\"' +'\n')
+		
+		print(f'now marking city:{city} as done')
+		isFinishedCities[city] =1
+		cp.write(f'\"{city}\"'+'\n')
+
 fp.close()
+vp.close()
+cp.close()
 driver.close()
